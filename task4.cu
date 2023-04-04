@@ -8,25 +8,26 @@
 using namespace std;
 using namespace cub;
 
+#define tol  1e-6
+
 __global__ void update(double* A, double* Anew, int size)
 {
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (j < size - 1 && j > 0 && i > 0 && i < size - 1){
-        double left = A[(i - 1) * size + j];
-        double right = A[(i + 1) * size + j];
-        double top = A[i * size + (j - 1)];
-        double bottom = A[i * size + (j + 1)];
-        Anew[i * size + j] = 0.25 * (left + right + top + bottom);
-    }
+	int j = blockIdx.x * blockDim.x + threadIdx.x;
+	int i = blockIdx.y * blockDim.y + threadIdx.y;
+	if (j < size - 1 && j > 0 && i > 0 && i < size - 1){
+		double left = A[i * size + j - 1];
+		double right = A[i * size + j + 1];
+		double top = A[(i - 1) * size + j];
+		double bottom = A[(i + 1) * size + j];
+		Anew[i*size + j] = 0.25 * (left + right + top + bottom);
+	}
 }
 
-__global__ void substract(double* A, double* Anew, int size)
-{
+__global__ void substract(double* A, double* Anew, double* res, int size){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	int j = blockIdx.y * blockDim.y + threadIdx.y;
 	if(i >= 0 && i < size && j >= 0 && j < size)
-		A[i*size + j] = Anew[i*size + j] - A[i*size + j];
+		res[i*size + j] = Anew[i*size + j] - A[i*size + j];
 }
 
 __constant__ double add;
@@ -59,12 +60,9 @@ int main(int argc, char* argv[]){
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-    double tol = atof(argv[1]);
-    const int size = atoi(argv[2]), iter_max = atoi(argv[3]);
+    const int size =512, iter_max = 1000;
 
-    double* A = new double[size*size];
-    double* Anew = new double[size*size];
-    double *d_A = NULL, *d_Anew = NULL;
+    double *d_A = NULL, *d_Anew = NULL, *d_Aprev;
 
     cudaError_t cudaerr = cudaSuccess;
     cudaerr = cudaMalloc((void **)&d_A, sizeof(double)*size*size);
@@ -81,6 +79,13 @@ int main(int argc, char* argv[]){
         exit(EXIT_FAILURE);
     }
 
+    cudaerr = cudaMalloc((void **)&d_Aprev, sizeof(double)*size*size);
+    if (cudaerr != cudaSuccess) {
+        fprintf(stderr, "Failed to allocate device vector A (error code %s)!\n",
+                cudaGetErrorString(cudaerr));
+        exit(EXIT_FAILURE);
+    }
+
     int iter = 0;
     double error = 1;
     double addH = 10.0 / (size - 1);
@@ -88,6 +93,7 @@ int main(int argc, char* argv[]){
 
     dim3 threadPerBlock = dim3(32, 32);
     dim3 blocksPerGrid = dim3((size+threadPerBlock.x-1)/threadPerBlock.x,(size+threadPerBlock.y-1)/threadPerBlock.y);
+    
     fill<<<blocksPerGrid, threadPerBlock>>>(d_A, d_Anew, size);
 
     double* d_error;
@@ -101,18 +107,33 @@ int main(int argc, char* argv[]){
     cudaStream_t stream;
     cudaStreamCreate(&stream);
 
+    bool graphCreated = false;
+    cudaGraph_t graph;
+    cudaGraphExec_t instance;
+
     while((error > tol) && (iter < iter_max/100)) {
         iter = iter + 2;
-        for(int i = 0; i<100;i++){
-            update<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_Anew,d_A, size);
-            update<<<blocksPerGrid, threadPerBlock,0,stream>>>( d_A,  d_Anew,size);
-
+        if(!graphCreated)
+	    {
+            cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+            for(int i = 0; i<100;i++){
+                update<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_Anew,d_A, size);
+                update<<<blocksPerGrid, threadPerBlock,0,stream>>>( d_A,  d_Anew,size);
+            }
+            cudaStreamEndCapture(stream, &graph);
+            cudaGraphInstantiate(&instance, graph, NULL, NULL, 0);
+            graphCreated=true;
         }
+       // swap = d_A;
+       // d_Aprev=d_A;
+        cudaGraphLaunch(instance, stream);
+	    cudaStreamSynchronize(stream);
 
-        substract<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_A, d_Anew, size);
-        cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_A, d_error, size*size,stream);
-        cudaMemcpy(&error, d_error, sizeof(double), cudaMemcpyDeviceToHost);
-        cudaMemcpy(d_A, d_Anew, size*size*sizeof(double), cudaMemcpyDeviceToDevice);
+        substract<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_A, d_Anew, d_Aprev, size);
+        cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_Aprev, d_error, size*size,stream);
+        cudaMemcpyAsync(&error, d_error, sizeof(double), cudaMemcpyDeviceToHost);
+       // cudaMemcpyAsync(d_A, d_Anew, size*size*sizeof(double), cudaMemcpyDeviceToDevice);
+        //swap = d_A;
         std::cout << iter << ":" << error << "\n";
 
     }
@@ -120,9 +141,6 @@ int main(int argc, char* argv[]){
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsedTime, start, stop);
     printf("Time taken: %3.1f ms\n", elapsedTime);
-
-    delete[] A;
-    delete[] Anew;
 
     cudaFree(d_A);
     cudaFree(d_Anew);
