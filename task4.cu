@@ -124,16 +124,12 @@ int main(int argc, char* argv[]){
             cudaGraphInstantiate(&instance, graph, NULL, NULL, 0);
             graphCreated=true;
         }
-       // swap = d_A;
-       // d_Aprev=d_A;
         cudaGraphLaunch(instance, stream);
-	    cudaStreamSynchronize(stream);
+	cudaStreamSynchronize(stream);
 
         substract<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_A, d_Anew, d_Aprev, size);
         cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_Aprev, d_error, size*size,stream);
         cudaMemcpyAsync(&error, d_error, sizeof(double), cudaMemcpyDeviceToHost);
-       // cudaMemcpyAsync(d_A, d_Anew, size*size*sizeof(double), cudaMemcpyDeviceToDevice);
-        //swap = d_A;
         std::cout << iter << ":" << error << "\n";
 
     }
