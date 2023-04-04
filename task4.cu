@@ -8,8 +8,6 @@
 using namespace std;
 using namespace cub;
 
-#define tol  1e-6
-
 __global__ void update(double* A, double* Anew, int size)
 {
 	int j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -60,9 +58,10 @@ int main(int argc, char* argv[]){
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-    const int size =512, iter_max = 1000;
+    double tol = atof(argv[1]);
+    const int size = atoi(argv[2]), iter_max = atoi(argv[3]);
 
-    double *d_A = NULL, *d_Anew = NULL, *d_Aprev;
+    double *d_A = NULL, *d_Anew = NULL, *d_Asub;
 
     cudaError_t cudaerr = cudaSuccess;
     cudaerr = cudaMalloc((void **)&d_A, sizeof(double)*size*size);
@@ -79,7 +78,7 @@ int main(int argc, char* argv[]){
         exit(EXIT_FAILURE);
     }
 
-    cudaerr = cudaMalloc((void **)&d_Aprev, sizeof(double)*size*size);
+    cudaerr = cudaMalloc((void **)&d_Asub, sizeof(double)*size*size);
     if (cudaerr != cudaSuccess) {
         fprintf(stderr, "Failed to allocate device vector A (error code %s)!\n",
                 cudaGetErrorString(cudaerr));
@@ -111,8 +110,8 @@ int main(int argc, char* argv[]){
     cudaGraph_t graph;
     cudaGraphExec_t instance;
 
-    while((error > tol) && (iter < iter_max/100)) {
-        iter = iter + 2;
+    while((error > tol) && (iter < iter_max/2/100)) {
+        iter = iter + 1;
         if(!graphCreated)
 	    {
             cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
@@ -124,11 +123,12 @@ int main(int argc, char* argv[]){
             cudaGraphInstantiate(&instance, graph, NULL, NULL, 0);
             graphCreated=true;
         }
-        cudaGraphLaunch(instance, stream);
-	cudaStreamSynchronize(stream);
 
-        substract<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_A, d_Anew, d_Aprev, size);
-        cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_Aprev, d_error, size*size,stream);
+        cudaGraphLaunch(instance, stream);
+	    cudaStreamSynchronize(stream);
+
+        substract<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_A, d_Anew, d_Asub, size);
+        cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_Asub, d_error, size*size,stream);
         cudaMemcpyAsync(&error, d_error, sizeof(double), cudaMemcpyDeviceToHost);
         std::cout << iter << ":" << error << "\n";
 
