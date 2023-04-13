@@ -1,3 +1,11 @@
+/* 
+ * Реализация уравнения теплопроводности в двумерной области
+ * на равномерных сетках с использованием CUDA. 
+ * Операция редукции (вычисление максимального значения ошибки)
+ * реализуется с помощью библиотеки CUB.
+*/
+
+// подключение библиотек
 #include <iostream>
 #include <stdlib.h>
 #include <chrono>
@@ -8,6 +16,7 @@
 using namespace std;
 using namespace cub;
 
+// функция, обновляющая значения сетки
 __global__ void update(double* A, double* Anew, int size)
 {
 	int j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -21,6 +30,7 @@ __global__ void update(double* A, double* Anew, int size)
 	}
 }
 
+// функция нахождения разности двух массивов
 __global__ void substract(double* A, double* Anew, double* res, int size){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	int j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -30,6 +40,7 @@ __global__ void substract(double* A, double* Anew, double* res, int size){
 
 __constant__ double add;
 
+// функция для заполнения массивов
 __global__ void fill(double* A, double* Anew, int size)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -47,10 +58,15 @@ __global__ void fill(double* A, double* Anew, int size)
     }
 }
 
+// основное тело программы
 int main(int argc, char* argv[]){
-
+    // время до выполнения программы
     auto begin = std::chrono::steady_clock::now();
+
+    // выбираем устрйоство для исполнения
     cudaSetDevice(1);
+
+    // инициализация событий
     cudaEvent_t start, stop;
     float elapsedTime;
 
@@ -58,12 +74,14 @@ int main(int argc, char* argv[]){
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
+    // инициализация переменных
     double tol = atof(argv[1]);
     const int size = atoi(argv[2]), iter_max = atoi(argv[3]);
 
     double *d_A = NULL, *d_Anew = NULL, *d_Asub;
-
     cudaError_t cudaerr = cudaSuccess;
+
+    // выделение памяти под массивы и проверка на наличие ошибок
     cudaerr = cudaMalloc((void **)&d_A, sizeof(double)*size*size);
     if (cudaerr != cudaSuccess) {
         fprintf(stderr, "Failed to allocate device vector A (error code %s)!\n",
@@ -85,6 +103,7 @@ int main(int argc, char* argv[]){
         exit(EXIT_FAILURE);
     }
 
+    // инициализация переменных
     int iter = 0;
     double error = 1;
     double addH = 10.0 / (size - 1);
@@ -93,8 +112,10 @@ int main(int argc, char* argv[]){
     dim3 threadPerBlock = dim3(32, 32);
     dim3 blocksPerGrid = dim3((size+threadPerBlock.x-1)/threadPerBlock.x,(size+threadPerBlock.y-1)/threadPerBlock.y);
     
+    // заполняем сетки
     fill<<<blocksPerGrid, threadPerBlock>>>(d_A, d_Anew, size);
 
+    // инициализация ошибки, редукции, потока и графа
     double* d_error;
     cudaMalloc(&d_error, sizeof(double));
 
@@ -110,11 +131,16 @@ int main(int argc, char* argv[]){
     cudaGraph_t graph;
     cudaGraphExec_t instance;
 
+    // цикл пересчета ошибки и обновления сетки 
     while((error > tol) && (iter < iter_max/2/100)) {
         iter = iter + 1;
+
+        // если граф не создан, то создаем с помощью захвата цикла for
         if(!graphCreated)
 	    {
             cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+
+            //обновление значений сетки (почему два раза - подробно описано в отчете)
             for(int i = 0; i<100;i++){
                 update<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_Anew,d_A, size);
                 update<<<blocksPerGrid, threadPerBlock,0,stream>>>( d_A,  d_Anew,size);
@@ -124,24 +150,31 @@ int main(int argc, char* argv[]){
             graphCreated=true;
         }
 
+        // запускаем граф
         cudaGraphLaunch(instance, stream);
 	    cudaStreamSynchronize(stream);
 
+        // вычитаем один массив из другого
         substract<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_A, d_Anew, d_Asub, size);
+        
+        // находим новое значение ошибки
         cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_Asub, d_error, size*size,stream);
         cudaMemcpyAsync(&error, d_error, sizeof(double), cudaMemcpyDeviceToHost);
         std::cout << iter << ":" << error << "\n";
 
     }
+    // считаем и выводим затраченное время с помощью cudaEvent
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsedTime, start, stop);
     printf("Time taken: %3.1f ms\n", elapsedTime);
 
+    // освобождаем память
     cudaFree(d_A);
     cudaFree(d_Anew);
     cudaFree(d_error);
 
+    // считаем и выводим затраченное время с помощью std::chrono
     auto end = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end-begin);
     std::cout << "The time:" << elapsed_ms.count() << "ms\n";
