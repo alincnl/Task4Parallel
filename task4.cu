@@ -66,14 +66,6 @@ int main(int argc, char* argv[]){
     // выбираем устрйоство для исполнения
     cudaSetDevice(1);
 
-    // инициализация событий
-    cudaEvent_t start, stop;
-    float elapsedTime;
-
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start, 0);
-
     // инициализация переменных
     double tol = atof(argv[1]);
     const int size = atoi(argv[2]), iter_max = atoi(argv[3]);
@@ -163,11 +155,6 @@ int main(int argc, char* argv[]){
         std::cout << iter << ":" << error << "\n";
 
     }
-    // считаем и выводим затраченное время с помощью cudaEvent
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&elapsedTime, start, stop);
-    printf("Time taken: %3.1f ms\n", elapsedTime);
 
     // освобождаем память
     cudaFree(d_A);
