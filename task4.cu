@@ -144,7 +144,6 @@ int main(int argc, char* argv[]){
 
         // запускаем граф
         cudaGraphLaunch(instance, stream);
-	    cudaStreamSynchronize(stream);
 
         // вычитаем один массив из другого
         substract<<<blocksPerGrid, threadPerBlock,0,stream>>>(d_A, d_Anew, d_Asub, size);
