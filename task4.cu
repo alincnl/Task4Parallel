@@ -151,7 +151,7 @@ int main(int argc, char* argv[]){
         
         // находим новое значение ошибки
         cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_Asub, d_error, size*size,stream);
-        cudaMemcpyAsync(&error, d_error, sizeof(double), cudaMemcpyDeviceToHost);
+        cudaMemcpy(&error, d_error, sizeof(double), cudaMemcpyDeviceToHost);
         std::cout << iter << ":" << error << "\n";
 
     }
