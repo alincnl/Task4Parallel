@@ -111,9 +111,11 @@ int main(int argc, char* argv[]){
     double* d_error;
     cudaMalloc(&d_error, sizeof(double));
 
-    void* d_temp_storage = NULL;
-    size_t temp_storage_bytes = 0;
-    cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_A, d_error, size*size);
+    // определяем требования к временному хранилищу устройства
+    void* d_temp_storage = NULL; // доступное для устройства выделение временного хранилища
+    size_t temp_storage_bytes = 0; // размер выделяемой памяти для d_temp_storage
+    cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_A, d_error, size*size); // предоставление количества байтов, необходимых для временного хранения, необходимого CUB
+    // выделяем временное хранилище
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
 
     cudaStream_t stream;
